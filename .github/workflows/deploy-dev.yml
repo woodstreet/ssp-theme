@@ -6,15 +6,15 @@ on:
       - develop
 
 concurrency:
-  group: deploy-dev-cns
+  group: deploy-dev-ssp
   cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
-      name: development-cns
-      url: https://develop-cns.wordpress.n4m.net/
+      name: development-ssp
+      url: https://develop-ssp.wordpress.n4m.net/
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -28,16 +28,16 @@ jobs:
           [ -z "${{ secrets.DEV_SERVER_HOST }}" ] && MISSING="$MISSING DEV_SERVER_HOST"
           [ -z "${{ secrets.DEV_SERVER_TARGET_PATH }}" ] && MISSING="$MISSING DEV_SERVER_TARGET_PATH"
           if [ -n "$MISSING" ]; then
-            echo "::error::The following required secrets are missing or empty in environment 'development-cns':$MISSING"
+            echo "::error::The following required secrets are missing or empty in environment 'development-ssp':$MISSING"
             exit 1
           fi
 
-          if [[ "${{ secrets.DEV_SERVER_TARGET_PATH }}" != *"/htdocs/wp-content/themes/cns-theme"* ]]; then
-            echo "::error::DEV_SERVER_TARGET_PATH must contain '/htdocs/wp-content/themes/cns-theme' (Current: ${{ secrets.DEV_SERVER_TARGET_PATH }})"
+          if [[ "${{ secrets.DEV_SERVER_TARGET_PATH }}" != *"/htdocs/wp-content/themes/ssp-theme"* ]]; then
+            echo "::error::DEV_SERVER_TARGET_PATH must contain '/htdocs/wp-content/themes/ssp-theme' (Current: ${{ secrets.DEV_SERVER_TARGET_PATH }})"
             exit 1
           fi
 
-          echo "✅ All required secrets and paths are configured for environment 'development-cns'."
+          echo "✅ All required secrets and paths are configured for environment 'development-ssp'."
 
       - name: Record Start Time
         run: echo "DEPLOY_START_TIME=$(date +%s)" >> "$GITHUB_ENV"
@@ -46,8 +46,8 @@ jobs:
         uses: rtCamp/action-slack-notify@v2
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_TITLE: "🚀 Deployment Started (Dev: cns)"
-          SLACK_MESSAGE: "Starting deployment to: https://develop-cns.wordpress.n4m.net/ (branch: ${{ github.ref_name }})"
+          SLACK_TITLE: "🚀 Deployment Started (Dev: ssp)"
+          SLACK_MESSAGE: "Starting deployment to: https://develop-ssp.wordpress.n4m.net/ (branch: ${{ github.ref_name }})"
           SLACK_COLOR: "#36a64f"
 
       - name: Deploy to Development Server via Rsync (SSH)
@@ -141,7 +141,7 @@ jobs:
         uses: rtCamp/action-slack-notify@v2
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_TITLE: "🧹 Cache Flush Results (Dev: cns)"
+          SLACK_TITLE: "🧹 Cache Flush Results (Dev: ssp)"
           SLACK_MESSAGE: "Logs (Duration: ${{ env.CACHE_FLUSH_TIME_SEC }}s):\n```\n${{ env.CACHE_FLUSH_LOGS }}\n```"
           SLACK_COLOR: ${{ steps.flush_caches.outcome == 'success' && '#36a64f' || '#ff0000' }}
 
@@ -158,8 +158,8 @@ jobs:
         uses: rtCamp/action-slack-notify@v2
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_TITLE: "🏁 Deployment Results (Dev: cns)"
-          SLACK_MESSAGE: "Deployment to cns finished with status: ${{ job.status }}\nDeploy Step Duration: ${{ env.DEPLOY_TIME_SEC }}s\nTotal Pipeline Duration: ${{ env.TOTAL_TIME_SEC }}s\n${{ env.SLACK_ERROR_DETAILS }}"
+          SLACK_TITLE: "🏁 Deployment Results (Dev: ssp)"
+          SLACK_MESSAGE: "Deployment to ssp finished with status: ${{ job.status }}\nDeploy Step Duration: ${{ env.DEPLOY_TIME_SEC }}s\nTotal Pipeline Duration: ${{ env.TOTAL_TIME_SEC }}s\n${{ env.SLACK_ERROR_DETAILS }}"
           SLACK_COLOR: ${{ job.status == 'success' && '#36a64f' || '#ff0000' }}
 
 
