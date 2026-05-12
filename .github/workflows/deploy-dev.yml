@@ -1,0 +1,165 @@
+name: Deploy to Development Environment
+
+on:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: deploy-dev-cns
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: development-cns
+      url: https://develop-cns.wordpress.n4m.net/
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Validate Secrets
+        run: |
+          MISSING=""
+          [ -z "${{ secrets.SLACK_WEBHOOK }}" ] && MISSING="$MISSING SLACK_WEBHOOK"
+          [ -z "${{ secrets.DEV_SSH_PRIVATE_KEY }}" ] && MISSING="$MISSING DEV_SSH_PRIVATE_KEY"
+          [ -z "${{ secrets.DEV_SERVER_USER }}" ] && MISSING="$MISSING DEV_SERVER_USER"
+          [ -z "${{ secrets.DEV_SERVER_HOST }}" ] && MISSING="$MISSING DEV_SERVER_HOST"
+          [ -z "${{ secrets.DEV_SERVER_TARGET_PATH }}" ] && MISSING="$MISSING DEV_SERVER_TARGET_PATH"
+          if [ -n "$MISSING" ]; then
+            echo "::error::The following required secrets are missing or empty in environment 'development-cns':$MISSING"
+            exit 1
+          fi
+
+          if [[ "${{ secrets.DEV_SERVER_TARGET_PATH }}" != *"/htdocs/wp-content/themes/cns-theme"* ]]; then
+            echo "::error::DEV_SERVER_TARGET_PATH must contain '/htdocs/wp-content/themes/cns-theme' (Current: ${{ secrets.DEV_SERVER_TARGET_PATH }})"
+            exit 1
+          fi
+
+          echo "✅ All required secrets and paths are configured for environment 'development-cns'."
+
+      - name: Record Start Time
+        run: echo "DEPLOY_START_TIME=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Notify Slack - Started
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_TITLE: "🚀 Deployment Started (Dev: cns)"
+          SLACK_MESSAGE: "Starting deployment to: https://develop-cns.wordpress.n4m.net/ (branch: ${{ github.ref_name }})"
+          SLACK_COLOR: "#36a64f"
+
+      - name: Deploy to Development Server via Rsync (SSH)
+        run: |
+          START_TIME=$(date +%s)
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEV_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          rsync ${{ secrets.ARGS || '-rlgoDzvc -i --delete' }} \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            --exclude="/node_modules/" \
+            --exclude="/.git/" \
+            --exclude="/.github/" \
+            --exclude="/src/" \
+            --exclude="package-lock.json" \
+            --exclude=".parcel-cache/" \
+            --exclude="gulpfile.js" \
+            --exclude="package.json" \
+            --exclude="yarn.lock" \
+            --exclude="/assets/scss/" \
+            --exclude="deploy_output.log" \
+            ./ ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }}:${{ secrets.DEV_SERVER_TARGET_PATH }} 2>&1 | tee deploy_output.log
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            DURATION=$(( $(date +%s) - START_TIME ))
+            {
+              echo "SLACK_ERROR_DETAILS<<EOF"
+              echo "*Deployment Error Details:*"
+              echo '```'
+              tail -n 20 deploy_output.log
+              echo '```'
+              echo "EOF"
+              echo "DEPLOY_TIME_SEC=$DURATION"
+            } >> "$GITHUB_ENV"
+            exit 1
+          fi
+          DURATION=$(( $(date +%s) - START_TIME ))
+          echo "DEPLOY_TIME_SEC=$DURATION" >> "$GITHUB_ENV"
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEV_SSH_PRIVATE_KEY }}
+          ARGS: "-rlgoDzvc -i --delete"
+          SOURCE: "./"
+          REMOTE_HOST: ${{ secrets.DEV_SERVER_HOST }}
+          REMOTE_USER: ${{ secrets.DEV_SERVER_USER }}
+          TARGET: ${{ secrets.DEV_SERVER_TARGET_PATH }}
+          EXCLUDE: "/node_modules/, /.git/, /.github/, /src/, package-lock.json"
+
+      - name: Flush Caches
+        id: flush_caches
+        run: |
+          START_TIME=$(date +%s)
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.DEV_SERVER_USER }}@${{ secrets.DEV_SERVER_HOST }} "
+            cd ${{ secrets.DEV_SERVER_TARGET_PATH }} || exit 1
+            if wp cli has-command w3-total-cache; then
+              echo 'Flushing W3 Total Cache...'
+              wp w3-total-cache flush all
+            else
+              echo 'W3 Total Cache CLI not found, skipping...'
+            fi
+            if wp cli has-command elementor; then
+              echo 'Flushing Elementor Cache...'
+              wp elementor flush_css
+            else
+              echo 'Elementor CLI not found, skipping...'
+            fi
+          " 2>&1 | tee cache_output.log
+          
+          {
+            echo "CACHE_FLUSH_LOGS<<EOF"
+            cat cache_output.log
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            DURATION=$(( $(date +%s) - START_TIME ))
+            {
+              echo "SLACK_ERROR_DETAILS<<EOF"
+              echo "*Cache Flush Error Details:*"
+              echo '```'
+              tail -n 20 cache_output.log
+              echo '```'
+              echo "EOF"
+              echo "CACHE_FLUSH_TIME_SEC=$DURATION"
+            } >> "$GITHUB_ENV"
+            exit 1
+          fi
+          DURATION=$(( $(date +%s) - START_TIME ))
+          echo "CACHE_FLUSH_TIME_SEC=$DURATION" >> "$GITHUB_ENV"
+
+      - name: Notify Slack - Cache Flush Results
+        if: always() && steps.flush_caches.outcome != 'skipped'
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_TITLE: "🧹 Cache Flush Results (Dev: cns)"
+          SLACK_MESSAGE: "Logs (Duration: ${{ env.CACHE_FLUSH_TIME_SEC }}s):\n```\n${{ env.CACHE_FLUSH_LOGS }}\n```"
+          SLACK_COLOR: ${{ steps.flush_caches.outcome == 'success' && '#36a64f' || '#ff0000' }}
+
+      - name: Calculate Total Time
+        if: always()
+        run: |
+          if [ -n "$DEPLOY_START_TIME" ]; then
+            TOTAL_TIME=$(( $(date +%s) - DEPLOY_START_TIME ))
+            echo "TOTAL_TIME_SEC=$TOTAL_TIME" >> "$GITHUB_ENV"
+          fi
+
+      - name: Notify Slack - Deployment Finished
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_TITLE: "🏁 Deployment Results (Dev: cns)"
+          SLACK_MESSAGE: "Deployment to cns finished with status: ${{ job.status }}\nDeploy Step Duration: ${{ env.DEPLOY_TIME_SEC }}s\nTotal Pipeline Duration: ${{ env.TOTAL_TIME_SEC }}s\n${{ env.SLACK_ERROR_DETAILS }}"
+          SLACK_COLOR: ${{ job.status == 'success' && '#36a64f' || '#ff0000' }}
+
+
